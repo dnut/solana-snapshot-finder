@@ -1,10 +1,12 @@
 prefix := "/usr/local"
+python3 := "python3"
+
 _data := $(prefix)/share/snapshot-finder
 
 install:
 	mkdir $(_data)
 	cp snapshot-finder.py $(_data)/snapshot-finder.py
-	python -m venv $(_data)/venv
+	$(python3) -m venv $(_data)/venv
 	$(_data)/venv/bin/pip install -r requirements.txt
 	echo '#!/usr/bin/env bash' > $(prefix)/bin/snapshot-finder
 	echo '$(_data)/venv/bin/python $(_data)/snapshot-finder.py $$@' >> $(prefix)/bin/snapshot-finder
