@@ -25,9 +25,10 @@ parser.add_argument('-r', '--rpc_address',
 
 parser.add_argument("--slot", default=0, type=int,
                      help="search for a snapshot with a specific slot number (useful for network restarts)")
+parser.add_argument("--version", default=None, help="search for a snapshot from a specific version node")
 parser.add_argument('--max_snapshot_age', default=1300, type=int, help='How many slots ago the snapshot was created (in slots)')
 parser.add_argument('--min_download_speed', default=60, type=int, help='Minimum average snapshot download speed in megabytes')
-parser.add_argument('--max_download_speed', type=int, 
+parser.add_argument('--max_download_speed', type=int,
 help='Maximum snapshot download speed in megabytes - https://github.com/c29r3/solana-snapshot-finder/issues/11. Example: --max_download_speed 192')
 parser.add_argument('--max_latency', default=40, type=int, help='The maximum value of latency (milliseconds). If latency > max_latency --> skip')
 parser.add_argument('--with_private_rpc', action="store_true", help='Enable adding and checking RPCs with the --private-rpc option.This slow down checking and searching but potentially increases'
@@ -48,6 +49,7 @@ args = parser.parse_args()
 DEFAULT_HEADERS = {"Content-Type": "application/json"}
 RPC = args.rpc_address
 SPECIFIC_SLOT = int(args.slot)
+SPECIFIC_VERSION = args.version
 MAX_SNAPSHOT_AGE_IN_SLOTS = args.max_snapshot_age
 WITH_PRIVATE_RPC = args.with_private_rpc
 THREADS_COUNT = args.threads_count
@@ -68,6 +70,7 @@ current_slot = 0
 DISCARDED_BY_ARCHIVE_TYPE = 0
 DISCARDED_BY_LATENCY = 0
 DISCARDED_BY_SLOT = 0
+DISCARDED_BY_VERSION = 0
 DISCARDED_BY_UNKNW_ERR = 0
 DISCARDED_BY_TIMEOUT = 0
 FULL_LOCAL_SNAPSHOTS = []
@@ -186,21 +189,22 @@ def get_current_slot():
 
 
 def get_all_rpc_ips():
+    global DISCARDED_BY_VERSION
+
     logger.debug("get_all_rpc_ips()")
     d = '{"jsonrpc":"2.0", "id":1, "method":"getClusterNodes"}'
     r = do_request(url_=RPC, method_='post', data_=d, timeout_=25)
     if 'result' in str(r.text):
-        if WITH_PRIVATE_RPC is True:
-            rpc_ips = []
-            for node in r.json()["result"]:
-                if node["rpc"] is not None:
-                    rpc_ips.append(node["rpc"])
-                else:
-                    gossip_ip = node["gossip"].split(":")[0]
-                    rpc_ips.append(f'{gossip_ip}:8899')
-
-        else:
-            rpc_ips = [rpc["rpc"] for rpc in r.json()["result"] if rpc["rpc"] is not None]
+        rpc_ips = []
+        for node in r.json()["result"]:
+            if SPECIFIC_VERSION is not None and node["version"] != SPECIFIC_VERSION:
+                DISCARDED_BY_VERSION += 1
+                continue
+            if node["rpc"] is not None:
+                rpc_ips.append(node["rpc"])
+            elif WITH_PRIVATE_RPC is True:
+                gossip_ip = node["gossip"].split(":")[0]
+                rpc_ips.append(f'{gossip_ip}:8899')
 
         rpc_ips = list(set(rpc_ips))
         logger.debug(f'RPC_IPS LEN before blacklisting {len(rpc_ips)}')
@@ -318,17 +322,18 @@ def download(url: str):
     try:
         # dirty trick with wget. Details here - https://github.com/c29r3/solana-snapshot-finder/issues/11
         if MAX_DOWNLOAD_SPEED_MB is not None:
-            process = subprocess.run([wget_path, f'--limit-rate={MAX_DOWNLOAD_SPEED_MB}M', '--trust-server-names', url, f'-O{temp_fname}'], 
+            process = subprocess.run([wget_path, '--progress=dot:giga', f'--limit-rate={MAX_DOWNLOAD_SPEED_MB}M',
+                                      '--trust-server-names', url, f'-O{temp_fname}'],
               stdout=subprocess.PIPE,
               universal_newlines=True)
         else:
-            process = subprocess.run([wget_path, '--trust-server-names', url, f'-O{temp_fname}'], 
+            process = subprocess.run([wget_path, '--progress=dot:giga', '--trust-server-names', url, f'-O{temp_fname}'],
               stdout=subprocess.PIPE,
               universal_newlines=True)
 
         logger.info(f'Rename the downloaded file {temp_fname} --> {fname}')
         os.rename(temp_fname, f'{SNAPSHOT_PATH}/{fname}')
-    
+
     except Exception as unknwErr:
         logger.error(f'Exception in download() func. Make sure wget is installed\n{unknwErr}')
 
@@ -359,7 +364,7 @@ def main_worker():
         logger.info(f'The following information shows for what reason and how many RPCs were skipped.'
         f'Timeout most probably mean, that node RPC port does not respond (port is closed)\n'
         f'{DISCARDED_BY_ARCHIVE_TYPE=} | {DISCARDED_BY_LATENCY=} |'
-        f' {DISCARDED_BY_SLOT=} | {DISCARDED_BY_TIMEOUT=} | {DISCARDED_BY_UNKNW_ERR=}') 
+        f' {DISCARDED_BY_SLOT=} | {DISCARDED_BY_VERSION=} | {DISCARDED_BY_TIMEOUT=} | {DISCARDED_BY_UNKNW_ERR=}')
 
         if len(json_data["rpc_nodes"]) == 0:
             logger.info(f'No snapshot nodes were found matching the given parameters: {args.max_snapshot_age=}')
@@ -413,7 +418,7 @@ def main_worker():
                         if full_snap_slot__ == FULL_LOCAL_SNAP_SLOT:
                             continue
 
-                    
+
                     if 'incremental' in path:
                         r = do_request(f'http://{rpc_node["snapshot_address"]}/incremental-snapshot.tar.bz2', method_='head', timeout_=2)
                         if 'location' in str(r.headers) and 'error' not in str(r.text):
@@ -450,7 +455,7 @@ def main_worker():
         return 1
 
 
-logger.info("Version: 0.3.6")
+logger.info("Version: 0.3.7")
 logger.info("https://github.com/c29r3/solana-snapshot-finder\n\n")
 logger.info(f'{RPC=}\n'
       f'{MAX_SNAPSHOT_AGE_IN_SLOTS=}\n'
@@ -509,6 +514,6 @@ while NUM_OF_ATTEMPTS <= NUM_OF_MAX_ATTEMPTS:
     if NUM_OF_ATTEMPTS >= NUM_OF_MAX_ATTEMPTS:
         logger.error(f'Could not find a suitable snapshot --> exit')
         sys.exit()
-    
+
     logger.info(f"Sleeping {SLEEP_BEFORE_RETRY} seconds before next try")
     time.sleep(SLEEP_BEFORE_RETRY)
