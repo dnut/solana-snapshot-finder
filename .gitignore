@@ -1,3 +1,8 @@
-snapshot-finder.log
 snapshot.json
+
+venv/
+
+*.log
+*.tar
+*.bz2
 *.zst

@@ -26,11 +26,12 @@ parser.add_argument('-r', '--rpc_address',
 parser.add_argument("--slot", default=0, type=int,
                      help="search for a snapshot with a specific slot number (useful for network restarts)")
 parser.add_argument("--version", default=None, help="search for a snapshot from a specific version node")
+parser.add_argument("--wildcard_version", default=None, help="search for a snapshot with a major / minor version e.g. 1.18 (excluding .23)")
 parser.add_argument('--max_snapshot_age', default=1300, type=int, help='How many slots ago the snapshot was created (in slots)')
 parser.add_argument('--min_download_speed', default=60, type=int, help='Minimum average snapshot download speed in megabytes')
 parser.add_argument('--max_download_speed', type=int,
 help='Maximum snapshot download speed in megabytes - https://github.com/c29r3/solana-snapshot-finder/issues/11. Example: --max_download_speed 192')
-parser.add_argument('--max_latency', default=40, type=int, help='The maximum value of latency (milliseconds). If latency > max_latency --> skip')
+parser.add_argument('--max_latency', default=100, type=int, help='The maximum value of latency (milliseconds). If latency > max_latency --> skip')
 parser.add_argument('--with_private_rpc', action="store_true", help='Enable adding and checking RPCs with the --private-rpc option.This slow down checking and searching but potentially increases'
                     ' the number of RPCs from which snapshots can be downloaded.')
 parser.add_argument('--measurement_time', default=7, type=int, help='Time in seconds during which the script will measure the download speed')
@@ -38,7 +39,7 @@ parser.add_argument('--snapshot_path', type=str, default=".", help='The location
                                                                      ' Example: /home/ubuntu/solana/validator-ledger')
 parser.add_argument('--num_of_retries', default=5, type=int, help='The number of retries if a suitable server for downloading the snapshot was not found')
 parser.add_argument('--sleep', default=7, type=int, help='Sleep before next retry (seconds)')
-parser.add_argument('--sort_order', default='slots_diff', type=str, help='Priority way to sort the found servers. latency or slots_diff')
+parser.add_argument('--sort_order', default='latency', type=str, help='Priority way to sort the found servers. latency or slots_diff')
 parser.add_argument('-ipb', '--ip_blacklist', default='', type=str, help='Comma separated list of ip addresse (ip:port) that will be excluded from the scan. Example: -ipb 1.1.1.1:8899,8.8.8.8:8899')
 parser.add_argument('-b', '--blacklist', default='', type=str, help='If the same corrupted archive is constantly downloaded, you can exclude it.'
                     ' Specify either the number of the slot you want to exclude, or the hash of the archive name. '
@@ -50,6 +51,7 @@ DEFAULT_HEADERS = {"Content-Type": "application/json"}
 RPC = args.rpc_address
 SPECIFIC_SLOT = int(args.slot)
 SPECIFIC_VERSION = args.version
+WILDCARD_VERSION = args.wildcard_version
 MAX_SNAPSHOT_AGE_IN_SLOTS = args.max_snapshot_age
 WITH_PRIVATE_RPC = args.with_private_rpc
 THREADS_COUNT = args.threads_count
@@ -197,7 +199,8 @@ def get_all_rpc_ips():
     if 'result' in str(r.text):
         rpc_ips = []
         for node in r.json()["result"]:
-            if SPECIFIC_VERSION is not None and node["version"] != SPECIFIC_VERSION:
+            if (WILDCARD_VERSION is not None and node["version"] and WILDCARD_VERSION not in node["version"]) or \
+               (SPECIFIC_VERSION is not None and node["version"] and node["version"] != SPECIFIC_VERSION):
                 DISCARDED_BY_VERSION += 1
                 continue
             if node["rpc"] is not None:
@@ -455,7 +458,7 @@ def main_worker():
         return 1
 
 
-logger.info("Version: 0.3.7")
+logger.info("Version: 0.3.9")
 logger.info("https://github.com/c29r3/solana-snapshot-finder\n\n")
 logger.info(f'{RPC=}\n'
       f'{MAX_SNAPSHOT_AGE_IN_SLOTS=}\n'
